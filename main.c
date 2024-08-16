@@ -30,7 +30,7 @@
 #define WIFI_CNTL_BIT 0x20
 //wait time for RX in MS
 //100 occasionally fails when 5 packets need to be sent
-#define WAIT_TIME 150
+#define WAIT_TIME 100
 #define MESSAGE_LENGTH 240
 
 static const char *TAG = "esp-now";
@@ -42,20 +42,19 @@ uint8_t broadcastAddrs[NUM_BOARDS][MAC_ADDR_BYTES] = {{0x84, 0xfc, 0xe6, 0x7b, 0
                                                     {0x30, 0x30, 0xf9, 0x5a, 0x88, 0x48}, //3
                                                     {0x3c, 0x84, 0x27, 0x04, 0xfd, 0x18}}; //4
 //M = 1, S = 0
-uint8_t master = 1;
+uint8_t master = 0;
 
 //index in array for current board
 //change this when switching to new board
-uint8_t myIndex = 1;
-
-//for checking when data is received
-uint8_t data_recv = 0;
+uint8_t myIndex = 2;
 
 // Structure example to send data
 // Must match the receiver structure
 // max payload is 250 bytes
 typedef struct struct_message {
     uint8_t id;
+    //indicates end of transmission
+    uint8_t tx_end;
     char msg[MESSAGE_LENGTH];
 } struct_message;
 
@@ -151,6 +150,7 @@ void send_to_peers(){
     //set send data
     strcpy(sendData.msg, "TEST");
     esp_sleep_enable_timer_wakeup(4 * HALF_SECOND);
+    sendData.tx_end = 0;
     
     while(1){
         /*
@@ -172,6 +172,10 @@ void send_to_peers(){
         }
         */
         vTaskDelay(pdMS_TO_TICKS(WAIT_TIME));
+        if (!recvData.tx_end){
+            ESP_LOGI(TAG, "wait");
+            vTaskDelay(pdMS_TO_TICKS(WAIT_TIME));
+        }
         esp_wifi_stop();
 
 
@@ -195,6 +199,7 @@ void respond(){
         //TODO: violating watchdog, will fix later?
         //while(!data_recv);
     
+    sendData.tx_end = 0;
     uint8_t destination = recvData.id;
     uint8_t string_terminated = 0;
     uint8_t packet_counter = 0;
@@ -204,6 +209,7 @@ void respond(){
             //currently NOT sending the null terminator, could this be an issue?
             if (c == '\0'){
                 string_terminated = 1;
+                sendData.tx_end = 1;
                 break;
             }
             sendData.msg[i] = c;
@@ -220,12 +226,6 @@ void respond(){
         packet_counter++;
     }
 
-    
-    
-    
-            //*/
-            //TODO: it might make sense to set a max wait time before losing master status, but for testing we just want to define 1 as always master for now
-
 }
 
 // callback when data is sent
@@ -235,7 +235,7 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
   //Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
   //does not logging improve performance?
     if (master){
-        if (ESP_NOW_SEND_SUCCESS){
+        if (status == ESP_NOW_SEND_SUCCESS){
             ESP_LOGI(TAG, "%d: Delivery Success", (int)recvData.id);
         }
         else{
